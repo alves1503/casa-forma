@@ -1,0 +1,519 @@
+openapi: 3.1.0
+info:
+  title: Casa Forma API
+  version: 1.0.0
+  description: |
+    API do Casa Forma para consultar o catálogo, gerar prévias de móveis e
+    administrar as fotos dos produtos.
+
+    Os endpoints administrativos exigem autenticação HTTP Basic. As imagens
+    aceitas são JPG, PNG e WEBP; o limite de resolução é 40 megapixels.
+servers:
+  - url: http://localhost:8000
+    description: Backend local iniciado pelo Docker Compose
+tags:
+  - name: Sistema
+    description: Verificação de disponibilidade da API.
+  - name: Catálogo
+    description: Consulta pública dos móveis disponíveis.
+  - name: Mídia
+    description: Acesso às fotos de referência do catálogo.
+  - name: Prévia
+    description: Geração de uma composição do móvel no ambiente enviado.
+  - name: Administração
+    description: Operações protegidas para gerenciar as fotos dos móveis.
+paths:
+  /api/health:
+    get:
+      tags:
+        - Sistema
+      summary: Verificar disponibilidade da API
+      description: Endpoint para health checks e monitoramento do serviço.
+      operationId: getHealth
+      responses:
+        "200":
+          description: API disponível.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthView"
+              example:
+                status: ok
+
+  /api/furniture:
+    get:
+      tags:
+        - Catálogo
+      summary: Listar móveis
+      description: |
+        Retorna todos os móveis cadastrados no catálogo, incluindo a URL da foto
+        de referência e a indicação de foto demonstrativa.
+      operationId: listFurniture
+      responses:
+        "200":
+          description: Lista de móveis do catálogo.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FurnitureView"
+              example:
+                - id: sofa-aurora
+                  name: Sofá Aurora
+                  category: Sala de estar
+                  description: Sofá de linhas contemporâneas.
+                  color: Verde petróleo
+                  reference_alt: Sofá Aurora — foto do móvel
+                  photo_url: /media/demo/sofa-aurora.jpg
+                  is_demo: true
+
+  /api/furniture/{furniture_id}:
+    parameters:
+      - name: furniture_id
+        in: path
+        required: true
+        description: Identificador estável do móvel no catálogo.
+        schema:
+          type: string
+        example: sofa-aurora
+    get:
+      tags:
+        - Catálogo
+      summary: Consultar móvel
+      description: Retorna os detalhes de um móvel pelo identificador.
+      operationId: getFurniture
+      responses:
+        "200":
+          description: Móvel encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FurnitureView"
+        "404":
+          $ref: "#/components/responses/FurnitureNotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /media/{source}/{filename}:
+    parameters:
+      - name: source
+        in: path
+        required: true
+        description: Origem da imagem, normalmente `demo` ou `uploads`.
+        schema:
+          type: string
+        example: demo
+      - name: filename
+        in: path
+        required: true
+        description: Nome do arquivo de imagem.
+        schema:
+          type: string
+        example: sofa-aurora.jpg
+    get:
+      tags:
+        - Mídia
+      summary: Obter foto de um móvel
+      description: |
+        Entrega a imagem de referência do catálogo. Use o caminho relativo
+        informado em `photo_url` por `GET /api/furniture`.
+      operationId: getFurnitureMedia
+      responses:
+        "200":
+          description: Arquivo de imagem do catálogo.
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/MediaNotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/preview:
+    post:
+      tags:
+        - Prévia
+      summary: Gerar prévia no ambiente
+      description: |
+        Envia uma foto do cômodo e o identificador de um móvel do catálogo.
+        A foto do móvel cadastrada é usada como referência. A geração usa o
+        modelo configurado no servidor com qualidade baixa. A imagem do cômodo
+        é processada para a requisição e não é persistida pela aplicação.
+      operationId: generatePreview
+      requestBody:
+        required: true
+        description: Dados multipart da foto do cômodo e do móvel escolhido.
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/PreviewRequest"
+            encoding:
+              room_photo:
+                contentType: image/jpeg, image/png, image/webp
+            examples:
+              sofa:
+                summary: Prévia com o sofá Aurora
+                value:
+                  furniture_id: sofa-aurora
+      responses:
+        "200":
+          description: Prévia gerada com sucesso.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewView"
+        "400":
+          $ref: "#/components/responses/InvalidRoomImage"
+        "404":
+          $ref: "#/components/responses/FurnitureNotFound"
+        "413":
+          $ref: "#/components/responses/RoomImageTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedImageFormat"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/PreviewUnavailable"
+
+  /api/admin/session:
+    get:
+      tags:
+        - Administração
+      summary: Consultar sessão administrativa
+      description: Valida as credenciais HTTP Basic e identifica o administrador.
+      operationId: getAdminSession
+      security:
+        - HTTPBasic: []
+      responses:
+        "200":
+          description: Credenciais válidas.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSessionView"
+              example:
+                authenticated: true
+                username: admin
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/admin/furniture:
+    get:
+      tags:
+        - Administração
+      summary: Listar móveis para administração
+      description: Retorna o catálogo disponível para atualizar fotos.
+      operationId: listAdminFurniture
+      security:
+        - HTTPBasic: []
+      responses:
+        "200":
+          description: Lista de móveis do catálogo.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FurnitureView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/admin/furniture/{furniture_id}/photo:
+    parameters:
+      - name: furniture_id
+        in: path
+        required: true
+        description: Identificador estável do móvel no catálogo.
+        schema:
+          type: string
+        example: sofa-aurora
+    post:
+      tags:
+        - Administração
+      summary: Atualizar foto de um móvel
+      description: |
+        Substitui a foto de referência do móvel. O arquivo precisa ser uma
+        imagem JPG, PNG ou WEBP válida, com até 10 MB e no máximo 40 megapixels.
+      operationId: updateFurniturePhoto
+      security:
+        - HTTPBasic: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/UpdateFurniturePhotoRequest"
+            encoding:
+              photo:
+                contentType: image/jpeg, image/png, image/webp
+      responses:
+        "200":
+          description: Móvel atualizado com a nova foto.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FurnitureView"
+        "400":
+          $ref: "#/components/responses/InvalidFurnitureImage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/FurnitureNotFound"
+        "413":
+          $ref: "#/components/responses/FurnitureImageTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedImageFormat"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/PhotoStorageError"
+
+components:
+  securitySchemes:
+    HTTPBasic:
+      type: http
+      scheme: basic
+      description: Credenciais do usuário administrador configuradas no seed.
+  schemas:
+    FurnitureView:
+      type: object
+      description: Item disponível no catálogo de móveis.
+      required:
+        - id
+        - name
+        - category
+        - description
+        - color
+        - reference_alt
+        - photo_url
+        - is_demo
+      properties:
+        id:
+          type: string
+          description: Identificador estável usado nas rotas da API.
+          example: sofa-aurora
+        name:
+          type: string
+          description: Nome comercial do móvel.
+          example: Sofá Aurora
+        category:
+          type: string
+          description: Categoria ou ambiente indicado.
+          example: Sala de estar
+        description:
+          type: string
+          description: Descrição do móvel.
+          example: Sofá de linhas contemporâneas.
+        color:
+          type: string
+          description: Cor ou acabamento principal.
+          example: Verde petróleo
+        reference_alt:
+          type: string
+          description: Texto alternativo para a foto do móvel.
+          example: Sofá Aurora — foto do móvel
+        photo_url:
+          type: string
+          description: Caminho relativo da foto de referência.
+          example: /media/demo/sofa-aurora.jpg
+        is_demo:
+          type: boolean
+          description: Indica se a foto atual é demonstrativa.
+          example: true
+    PreviewRequest:
+      type: object
+      required:
+        - room_photo
+        - furniture_id
+      properties:
+        room_photo:
+          type: string
+          format: binary
+          description: Foto JPG, PNG ou WEBP do cômodo; máximo de 16 MB.
+        furniture_id:
+          type: string
+          description: Identificador de um móvel retornado por GET /api/furniture.
+          example: sofa-aurora
+    PreviewView:
+      type: object
+      required:
+        - image
+      properties:
+        image:
+          type: string
+          description: Prévia PNG como data URI codificada em Base64.
+          example: data:image/png;base64,<conteúdo-base64>
+    UpdateFurniturePhotoRequest:
+      type: object
+      required:
+        - photo
+      properties:
+        photo:
+          type: string
+          format: binary
+          description: Nova foto JPG, PNG ou WEBP; máximo de 10 MB.
+    AdminSessionView:
+      type: object
+      required:
+        - authenticated
+        - username
+      properties:
+        authenticated:
+          type: boolean
+          description: Indica que as credenciais foram aceitas.
+          example: true
+        username:
+          type: string
+          description: Nome do administrador autenticado.
+          example: admin
+    HealthView:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          description: Estado atual da API.
+          enum:
+            - ok
+    APIError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Descrição do erro.
+          example: Móvel não encontrado.
+    HTTPValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidationError"
+    ValidationError:
+      type: object
+      required:
+        - loc
+        - msg
+        - type
+      properties:
+        loc:
+          type: array
+          items:
+            oneOf:
+              - type: string
+              - type: integer
+          description: Localização do campo inválido na requisição.
+        msg:
+          type: string
+          description: Mensagem de validação.
+        type:
+          type: string
+          description: Código da validação.
+        input:
+          description: Valor que causou a falha, quando disponível.
+        ctx:
+          type: object
+          additionalProperties: true
+          description: Contexto adicional da validação, quando disponível.
+
+  responses:
+    FurnitureNotFound:
+      description: Não existe móvel com o identificador informado.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/APIError"
+          example:
+            detail: Móvel não encontrado.
+    MediaNotFound:
+      description: Imagem inexistente ou caminho não permitido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/APIError"
+    InvalidRoomImage:
+      description: Foto ausente, inválida, grande demais em resolução ou incompatível com o tipo declarado.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/APIError"
+          example:
+            detail: O arquivo não é uma imagem válida.
+    InvalidFurnitureImage:
+      description: Arquivo ausente, inválido ou com resolução muito grande.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/APIError"
+    RoomImageTooLarge:
+      description: A imagem do cômodo excede o limite de 16 MB.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/APIError"
+          example:
+            detail: A imagem deve ter no máximo 16 MB.
+    FurnitureImageTooLarge:
+      description: A foto do móvel excede o limite de 10 MB.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/APIError"
+          example:
+            detail: A imagem deve ter no máximo 10 MB.
+    UnsupportedImageFormat:
+      description: O arquivo não está em formato JPG, PNG ou WEBP.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/APIError"
+          example:
+            detail: Use uma imagem JPG, PNG ou WEBP.
+    ValidationError:
+      description: Campos obrigatórios ausentes ou inválidos.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/HTTPValidationError"
+    PreviewUnavailable:
+      description: Serviço de geração de imagem indisponível ou não configurado.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/APIError"
+          example:
+            detail: Não foi possível gerar a prévia. Verifique a chave, o acesso ao modelo e tente novamente.
+    Unauthorized:
+      description: Autenticação HTTP Basic ausente ou inválida.
+      headers:
+        WWW-Authenticate:
+          description: Desafio de autenticação HTTP Basic.
+          schema:
+            type: string
+          example: Basic
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/APIError"
+          example:
+            detail: Usuário ou senha inválidos.
+    PhotoStorageError:
+      description: Falha ao armazenar ou atualizar a imagem.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/APIError"
